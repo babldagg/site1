@@ -1,43 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Ticket, Search, Filter, MoreVertical, Edit, Trash2, UserPlus, CheckCircle, XCircle, AlertCircle, Clock, MessageSquare, X } from 'lucide-react';
+import { Users, Ticket, Search, Filter, Edit, Trash2, UserPlus, CheckCircle, XCircle, AlertCircle, Clock, MessageSquare, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-
-type Status = 'new' | 'in_progress' | 'resolved' | 'closed';
-
-interface TicketMessage {
-  id: string;
-  content: string;
-  createdAt: string;
-  isAdmin: boolean;
-  userName: string;
-}
-
-interface Ticket {
-  id: string;
-  title: string;
-  category: string;
-  priority: string;
-  status: Status;
-  createdAt: string;
-  description: string;
-  messages: TicketMessage[];
-  user: {
-    name: string;
-    email: string;
-  };
-}
-
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: 'user' | 'admin';
-  createdAt: string;
-}
+import { supabase, type Status, type Ticket as TicketType, fetchTickets, updateTicketStatus, createMessage } from '../lib/supabase';
 
 interface TicketModalProps {
-  ticket: Ticket;
+  ticket: TicketType;
   onClose: () => void;
   onStatusChange: (status: Status) => void;
   onSendMessage: (message: string) => void;
@@ -61,9 +29,9 @@ function TicketModal({ ticket, onClose, onStatusChange, onSendMessage }: TicketM
           <div>
             <h2 className="text-2xl font-bold mb-2">{ticket.title}</h2>
             <div className="flex items-center space-x-4 text-sm text-gray-500">
-              <span>От: {ticket.user.name}</span>
+              <span>От: {ticket.user.raw_user_meta_data.name}</span>
               <span>•</span>
-              <span>{new Date(ticket.createdAt).toLocaleString()}</span>
+              <span>{new Date(ticket.created_at).toLocaleString()}</span>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
@@ -99,15 +67,15 @@ function TicketModal({ ticket, onClose, onStatusChange, onSendMessage }: TicketM
               <div
                 key={message.id}
                 className={`p-4 rounded-lg ${
-                  message.isAdmin
+                  message.is_admin
                     ? 'bg-blue-50 ml-8'
                     : 'bg-gray-50 mr-8'
                 }`}
               >
                 <div className="flex justify-between items-start mb-2">
-                  <span className="font-medium">{message.userName}</span>
+                  <span className="font-medium">{message.user.raw_user_meta_data.name}</span>
                   <span className="text-sm text-gray-500">
-                    {new Date(message.createdAt).toLocaleString()}
+                    {new Date(message.created_at).toLocaleString()}
                   </span>
                 </div>
                 <p className="text-gray-700">{message.content}</p>
@@ -139,22 +107,27 @@ function TicketModal({ ticket, onClose, onStatusChange, onSendMessage }: TicketM
 }
 
 interface UserModalProps {
-  user?: User;
   onClose: () => void;
-  onSave: (userData: Partial<User>) => void;
+  onSave: (userData: { email: string; password: string; name: string; role: 'user' | 'admin' }) => Promise<void>;
 }
 
-function UserModal({ user, onClose, onSave }: UserModalProps) {
+function UserModal({ onClose, onSave }: UserModalProps) {
   const [userData, setUserData] = useState({
-    name: user?.name || '',
-    email: user?.email || '',
-    role: user?.role || 'user',
+    email: '',
+    password: '',
+    name: '',
+    role: 'user' as const
   });
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(userData);
-    onClose();
+    try {
+      await onSave(userData);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    }
   };
 
   return (
@@ -162,9 +135,7 @@ function UserModal({ user, onClose, onSave }: UserModalProps) {
       <div className="bg-white rounded-lg w-full max-w-md">
         <div className="p-6 border-b">
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold">
-              {user ? 'Редактировать пользователя' : 'Создать пользователя'}
-            </h2>
+            <h2 className="text-xl font-bold">Создать пользователя</h2>
             <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
               <X className="w-6 h-6" />
             </button>
@@ -172,6 +143,12 @@ function UserModal({ user, onClose, onSave }: UserModalProps) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded relative">
+              {error}
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Имя
@@ -193,6 +170,19 @@ function UserModal({ user, onClose, onSave }: UserModalProps) {
               type="email"
               value={userData.email}
               onChange={(e) => setUserData({ ...userData, email: e.target.value })}
+              className="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Пароль
+            </label>
+            <input
+              type="password"
+              value={userData.password}
+              onChange={(e) => setUserData({ ...userData, password: e.target.value })}
               className="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
               required
             />
@@ -224,7 +214,7 @@ function UserModal({ user, onClose, onSave }: UserModalProps) {
               type="submit"
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
             >
-              {user ? 'Сохранить' : 'Создать'}
+              Создать
             </button>
           </div>
         </form>
@@ -234,57 +224,102 @@ function UserModal({ user, onClose, onSave }: UserModalProps) {
 }
 
 export function AdminPanel() {
-  const { isAuthenticated, user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'tickets' | 'users'>('tickets');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<Status | 'all'>('all');
-  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
-  const [userModalData, setUserModalData] = useState<{ user?: User; isOpen: boolean }>({
-    isOpen: false
-  });
-  
-  // Пример данных
-  const [tickets, setTickets] = useState<Ticket[]>([
-    {
-      id: '1',
-      title: 'Проблема с входом',
-      category: 'technical',
-      priority: 'high',
-      status: 'new',
-      description: 'Не могу войти в систему уже второй день. Пробовал сбросить пароль, но письмо не приходит.',
-      createdAt: '2024-03-15T10:30:00',
-      messages: [
-        {
-          id: '1',
-          content: 'Не могу войти в систему уже второй день.',
-          createdAt: '2024-03-15T10:30:00',
-          isAdmin: false,
-          userName: 'Иван Петров'
-        }
-      ],
-      user: {
-        name: 'Иван Петров',
-        email: 'ivan@example.com'
-      }
-    }
-  ]);
+  const [selectedTicket, setSelectedTicket] = useState<TicketType | null>(null);
+  const [userModalOpen, setUserModalOpen] = useState(false);
+  const [tickets, setTickets] = useState<TicketType[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
 
-  const [users, setUsers] = useState<User[]>([
-    {
-      id: '1',
-      name: 'Иван Петров',
-      email: 'ivan@example.com',
-      role: 'user',
-      createdAt: '2024-03-10T08:00:00'
-    }
-  ]);
-
-  React.useEffect(() => {
-    if (!isAuthenticated || user?.role !== 'admin') {
+  useEffect(() => {
+    if (!isAuthenticated || !user?.user_metadata?.role === 'admin') {
       navigate('/auth');
+      return;
     }
+
+    loadTickets();
+    loadUsers();
   }, [isAuthenticated, user, navigate]);
+
+  const loadTickets = async () => {
+    try {
+      const tickets = await fetchTickets();
+      setTickets(tickets);
+    } catch (error) {
+      console.error('Error loading tickets:', error);
+    }
+  };
+
+  const loadUsers = async () => {
+    try {
+      const { data: users, error } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setUsers(users);
+    } catch (error) {
+      console.error('Error loading users:', error);
+    }
+  };
+
+  const handleStatusChange = async (ticketId: string, newStatus: Status) => {
+    try {
+      await updateTicketStatus(ticketId, newStatus);
+      await loadTickets();
+    } catch (error) {
+      console.error('Error updating ticket status:', error);
+    }
+  };
+
+  const handleTicketMessageSend = async (ticketId: string, content: string) => {
+    if (!user) return;
+
+    try {
+      await createMessage({
+        ticket_id: ticketId,
+        content,
+        is_admin: true,
+        user_id: user.id
+      });
+      await loadTickets();
+    } catch (error) {
+      console.error('Error sending message:', error);
+    }
+  };
+
+  const handleCreateUser = async (userData: { email: string; password: string; name: string; role: 'user' | 'admin' }) => {
+    try {
+      const { error } = await supabase.auth.admin.createUser({
+        email: userData.email,
+        password: userData.password,
+        email_confirm: true,
+        user_metadata: {
+          name: userData.name,
+          role: userData.role
+        }
+      });
+
+      if (error) throw error;
+      await loadUsers();
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const handleDeleteUser = async (userId: string) => {
+    try {
+      const { error } = await supabase.auth.admin.deleteUser(userId);
+      if (error) throw error;
+      await loadUsers();
+    } catch (error) {
+      console.error('Error deleting user:', error);
+    }
+  };
 
   const getStatusIcon = (status: Status) => {
     switch (status) {
@@ -299,61 +334,7 @@ export function AdminPanel() {
     }
   };
 
-  const handleStatusChange = (ticketId: string, newStatus: Status) => {
-    setTickets(tickets.map(ticket =>
-      ticket.id === ticketId ? { ...ticket, status: newStatus } : ticket
-    ));
-  };
-
-  const handleTicketMessageSend = (ticketId: string, message: string) => {
-    setTickets(tickets.map(ticket => {
-      if (ticket.id === ticketId) {
-        return {
-          ...ticket,
-          messages: [
-            ...ticket.messages,
-            {
-              id: Date.now().toString(),
-              content: message,
-              createdAt: new Date().toISOString(),
-              isAdmin: true,
-              userName: user?.name || 'Администратор'
-            }
-          ]
-        };
-      }
-      return ticket;
-    }));
-  };
-
-  const handleDeleteTicket = (ticketId: string) => {
-    setTickets(tickets.filter(ticket => ticket.id !== ticketId));
-  };
-
-  const handleSaveUser = (userData: Partial<User>) => {
-    if (userModalData.user) {
-      // Обновление существующего пользователя
-      setUsers(users.map(u =>
-        u.id === userModalData.user.id ? { ...u, ...userData } : u
-      ));
-    } else {
-      // Создание нового пользователя
-      const newUser: User = {
-        id: Date.now().toString(),
-        name: userData.name!,
-        email: userData.email!,
-        role: userData.role || 'user',
-        createdAt: new Date().toISOString()
-      };
-      setUsers([...users, newUser]);
-    }
-  };
-
-  const handleDeleteUser = (userId: string) => {
-    setUsers(users.filter(user => user.id !== userId));
-  };
-
-  if (!isAuthenticated || user?.role !== 'admin') {
+  if (!isAuthenticated || !user?.user_metadata?.role === 'admin') {
     return null;
   }
 
@@ -428,7 +409,7 @@ export function AdminPanel() {
 
             {activeTab === 'users' && (
               <button
-                onClick={() => setUserModalData({ isOpen: true })}
+                onClick={() => setUserModalOpen(true)}
                 className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
               >
                 <UserPlus className="w-5 h-5" />
@@ -485,7 +466,7 @@ export function AdminPanel() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">
-                          {ticket.user.name}
+                          {ticket.user.raw_user_meta_data.name}
                         </div>
                         <div className="text-sm text-gray-500">
                           {ticket.user.email}
@@ -518,7 +499,7 @@ export function AdminPanel() {
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(ticket.createdAt).toLocaleDateString()}
+                        {new Date(ticket.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center space-x-3">
@@ -527,12 +508,6 @@ export function AdminPanel() {
                             className="text-blue-600 hover:text-blue-900"
                           >
                             <MessageSquare className="w-5 h-5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteTicket(ticket.id)}
-                            className="text-red-600 hover:text-red-900"
-                          >
-                            <Trash2 className="w-5 h-5" />
                           </button>
                         </div>
                       </td>
@@ -577,7 +552,7 @@ export function AdminPanel() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">
-                          {user.name}
+                          {user.raw_user_meta_data?.name}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -585,24 +560,19 @@ export function AdminPanel() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                          user.role === 'admin'
+                          user.raw_user_meta_data?.role === 'admin'
                             ? 'bg-purple-100 text-purple-800'
                             : 'bg-gray-100 text-gray-800'
                         }`}>
-                          {user.role}
+                          {user.raw_user_meta_data?.role || 'user'}
                         </span>
+                      
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(user.createdAt).toLocaleDateString()}
+                        {new Date(user.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center space-x-3">
-                          <button
-                            onClick={() => setUserModalData({ user, isOpen: true })}
-                            className="text-blue-600 hover:text-blue-900"
-                          >
-                            <Edit className="w-5 h-5" />
-                          </button>
                           <button
                             onClick={() => handleDeleteUser(user.id)}
                             className="text-red-600 hover:text-red-900"
@@ -634,12 +604,11 @@ export function AdminPanel() {
         />
       )}
 
-      {/* Модальное окно пользователя */}
-      {userModalData.isOpen && (
+      {/* Модальное окно создания пользователя */}
+      {userModalOpen && (
         <UserModal
-          user={userModalData.user}
-          onClose={() => setUserModalData({ isOpen: false })}
-          onSave={handleSaveUser}
+          onClose={() => setUserModalOpen(false)}
+          onSave={handleCreateUser}
         />
       )}
     </div>
